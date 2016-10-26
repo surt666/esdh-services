@@ -95,7 +95,7 @@
 (def open-dok
   (resource
    {:access-control {:allow-origin "*"}
-    :produces {:media-type #{"application/pdf"}}
+    :produces {:media-type #{"application/pdf" "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}}
     :methods
     {:get
      {:parameters {:query {:dok-id String}}
@@ -118,22 +118,36 @@
   (let [res (g/opret-notat (uuid/v1) false (:notat data) (str (l/local-now)) (:akt-id data))]
     (prn "RES" res)))
 
-(defn preview [data]
-  (let [dok (:dokument data)]
-    (let [d (Document.)
-        out (ByteArrayOutputStream.)
-        writer (PdfWriter/getInstance d out)]
-    (.open d)
-    (.. (XMLWorkerHelper/getInstance) (parseXHtml writer d (ByteArrayInputStream. dok)))
-    (.close d)
-    {:body (ByteArrayInputStream. (.toByteArray out))
-     :headers {"Content-Type" "application/json"}
-     :status 200})))
+(def preview
+  (resource
+   {:consumes {:media-type #{"application/edn;q=0.9"
+                             "application/json;q=0.8"
+                             "application/transit+json;q=0.7"}}
+    :produces {:media-type #{"application/pdf"}}
+    :access-control {:allow-origin "*"
+                     :allow-headers ["Content-Type"]
+                     :allow-methods #{:post}}
+    :methods {:post
+              {:response (fn [ctx]
+                           (let [body (:body ctx)
+                                 dok (:data body)
+                                 d (Document.)
+                                 out (ByteArrayOutputStream.)
+                                 writer (PdfWriter/getInstance d out)]
+                             (prn "DATA" dok)
+                             (.open d)
+                             (.. (XMLWorkerHelper/getInstance) (parseXHtml writer d (ByteArrayInputStream. (.getBytes dok))))
+                             (.close d)
+                             (.toByteArray out) ))}}}))
 
 (def command
   (resource
-   {:consumes {:media-type #{"text/plain"
-                             "application/pdf"
+   {:consumes {:media-type #{"application/edn;q=0.9"
+                             "application/json;q=0.8"
+                             "application/transit+json;q=0.7"}}
+    :produces {:media-type #{"application/pdf"
+                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                             "text/plain"
                              "text/html"
                              "application/edn;q=0.9"
                              "application/json;q=0.8"
@@ -153,13 +167,6 @@
                                (= command :opret-akt) (opret-akt data)
                                (= command :gem-notat) (opret-notat data))))}}}))
 
-(defn mediatype [file-head]
-  (prn "FH" file-head)
-  (cond
-    (re-find #"%PDF.*" file-head) "application/pdf"
-    (re-find #".*WORD.*" file-head) "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    :default "text/plain"))
-
 (def upload
   (resource
    {:consumes [{:media-type #{"multipart/form-data"}}]
@@ -175,7 +182,7 @@
                                  bytes (part-bytes part2)
                                  content-type (:name (part-content-type part2))
                                  file-id (uuid/v1)
-                                ; _ (prn "U" content-type akt-id bytes file-id)
+                                 _ (prn "U" content-type akt-id (String. bytes 0 50) file-id)
                                  filename (get (:params (:content-disposition (get (:body ctx) "files"))) "filename")]
                              (let [res (g/opret-dokument file-id akt-id true bytes (str (l/local-now)) content-type filename)]
                                (assoc (:response ctx) :file-id ))))}}}))
@@ -183,13 +190,12 @@
 (def svr
   (listener
    ["/"
-    [
+    [["preview" preview]
      ["sager" sager]
      ["akter" akter]
      ["notat" notat]
      ["dokument" open-dok]
      ["dokumenter" dokumenter]
      ["command" command]
-     ["upload" upload    ; (mp/wrap-multipart-params (handler upload))
-      ]]]
+     ["upload" upload]]]
    {:port 3000}))
